@@ -1,7 +1,7 @@
 /**
  * chat.c -- a little epoll chat server
  */
-
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,11 +12,18 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <fcntl.h>
 
 #define PORT "9034"
 
 #define handle_perror(err_msg) do { perror(err_msg); exit(EXIT_FAILURE); } while(0)
 #define handle_error(...) do { fprintf(stderr, __VA_ARGS__); exit(EXIT_FAILURE); } while(0)
+
+void print_events(struct epoll_event events[], int fd_count) {
+    for (int i = 0; i < fd_count; ++i) {
+        printf("%i fd: %i, event: %i\n", i , events[i].data.fd, events[i].events);
+    }
+}
 
 void *get_in_addr(struct sockaddr *sa) {
     if ( sa->sa_family == AF_INET ) {
@@ -102,7 +109,8 @@ void add_to_events(struct epoll_event *events[], int epollfd, int newfd, int *fd
         }
     }
 
-    struct epoll_event *new_event = (*events) + *fd_count;
+    struct epoll_event *new_event = (*events) + (*fd_count);
+
     new_event->data.fd = newfd;
     new_event->events = EPOLLIN;
 
@@ -114,21 +122,12 @@ void add_to_events(struct epoll_event *events[], int epollfd, int newfd, int *fd
 }
 
 
-void del_from_events(struct epoll_event events[], int epollfd, int fd, int i, int *fd_count) {
-
-    if ( epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, events + i) == -1 ) {
+void del_from_events(int epollfd, int fd, int *fd_count) {
+    if ( epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, NULL) == -1 ) {
         handle_perror("epoll_ctl; del");
     }
-
     (*fd_count)--;
-
-    int next_fd_size = (*fd_count);
-    for (int j = i; j < next_fd_size; ++j) {
-       events[j] = events[j + 1]; // moving (left <- right)
-    }
-
 }
-
 
 int main(void) {
 
@@ -160,7 +159,7 @@ int main(void) {
             handle_perror("epoll_wait");
         }
 
-        for (int i = 0; i < fd_count; ++i) {
+        for (int i = 0; i < epoll_count; ++i) {
             if (!(events[i].events & EPOLLIN)) continue;
 
             if (events[i].data.fd == listener) {
@@ -169,6 +168,8 @@ int main(void) {
                 if (newfd == -1) {
                     perror("accept");
                 } else {
+                    fcntl(newfd, F_SETFL, O_NONBLOCK);
+
                     add_to_events(&events, epollfd, newfd, &fd_count, &fd_size);
 
                     printf("chat: new connection from %s on socket %d\n",
@@ -182,14 +183,19 @@ int main(void) {
 
                 if (nbytes <= 0) {
                     // connection closed
-                    if (nbytes == 0) { // hung up
+                    if (nbytes == 0) {
+                        // socket hung up
                         printf("chat: socket %d hung up\n", sender_fd);
-                    } else { // error happend
+                        del_from_events(epollfd, sender_fd, &fd_count);
+                        close(sender_fd);
+
+                    } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                        // error happend that is not the non-block error
                         perror("recv");
+                        del_from_events(epollfd, sender_fd, &fd_count);
+                        close(sender_fd);
                     }
 
-                    del_from_events(events, epollfd, sender_fd, i, &fd_count);
-                    close(sender_fd);
                 } else {
                     // broadcast to call other file descriptors
                     for (int j = 0; j < fd_count; j++) {
@@ -197,7 +203,9 @@ int main(void) {
 
                         if (dest_fd != listener && dest_fd != sender_fd) {
                             if (send(dest_fd, buf, nbytes, 0) == -1) {
-                                perror("send");
+                                if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                                    perror("send");
+                                }
                             }
                         }
                     }

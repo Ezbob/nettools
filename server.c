@@ -113,15 +113,6 @@ int main() {
                 perror("send");
             }
 
-            char buf[512];
-            memset(&buf, '\0', sizeof(buf));
-            
-            if (recv(new_fd, &buf, strlen(buf), 0) == -1) {
-                perror("server: receive");
-            }
-
-            printf("server: '%s'\n", buf);
-
             close(new_fd);
             exit(0);
         }

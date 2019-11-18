@@ -19,11 +19,120 @@
 #define handle_perror(err_msg) do { perror(err_msg); exit(EXIT_FAILURE); } while(0)
 #define handle_error(...) do { fprintf(stderr, __VA_ARGS__); exit(EXIT_FAILURE); } while(0)
 
+#define is_non_block_error(errcode) (errcode == EAGAIN || errcode == EWOULDBLOCK)
+
 void print_events(struct epoll_event events[], int fd_count) {
     for (int i = 0; i < fd_count; ++i) {
         printf("%i fd: %i, event: %i\n", i , events[i].data.fd, events[i].events);
     }
 }
+
+
+struct chat_room {
+    int epollfd;
+    struct epoll_event *events;
+    int *broadcast_fds;
+    int in_use;
+    int capasity;
+};
+
+void debug_chat_room(struct chat_room *room) {
+    for (int i = 0; i < room->in_use; ++i) {
+        printf("%i| e.data.fd: %i, bfd: %i\n", i, room->events[i].data.fd, room->broadcast_fds[i]);
+    }
+}
+
+int chat_room_init(struct chat_room *r, int initial_cap) {
+    if (!r || initial_cap <= 0) return 1;
+
+    r->events = malloc(sizeof(struct epoll_event) * initial_cap);
+    if (!r->events) return 1;
+    
+    r->broadcast_fds = malloc(sizeof(int) * initial_cap);
+    if (!r->broadcast_fds) return 1;
+
+    r->epollfd = epoll_create1(0);
+    if (r->epollfd == -1) return 1;
+
+    r->in_use = 0;
+    r->capasity = initial_cap;
+
+    return 0;
+};
+
+void chat_room_deinit(struct chat_room *r) {
+    if (!r) return;
+
+    free(r->events);
+    free(r->broadcast_fds);
+}
+
+int chat_room_grow(struct chat_room *r) {
+    r->capasity *= 2;
+
+    r->broadcast_fds = realloc(r->broadcast_fds, sizeof(int) * r->capasity);
+    if (!r->broadcast_fds) return 1;
+
+    r->events = realloc(r->events, sizeof(struct epoll_event) * r->capasity);
+    if (!r->events) return 1;
+
+    return 0;
+}
+
+void chat_room_add_client(struct chat_room *r, int newfd) {
+    struct epoll_event *new_event = r->events;
+
+    new_event->data.fd = newfd;
+    new_event->events = EPOLLIN;
+
+    if ( epoll_ctl(r->epollfd, EPOLL_CTL_ADD, newfd, new_event) == -1 ) {
+        handle_perror("epoll_ctl; add");
+    }
+
+    r->broadcast_fds[r->in_use] = newfd;
+    r->in_use++; 
+
+    if (r->in_use == r->capasity) {
+        chat_room_grow(r);
+    }
+}
+
+void chat_room_remove_client(struct chat_room *r, int fd) {
+    int i, j;
+
+    if ( epoll_ctl(r->epollfd, EPOLL_CTL_DEL, fd, NULL) == -1 ) {
+        handle_perror("epoll_ctl; del");
+    }
+
+    for (i = 0; i < r->in_use; ++i) {
+        if (r->broadcast_fds[i] == fd) break;
+    }
+
+    for (j = i; j < (r->in_use - 1); ++j) {
+        r->broadcast_fds[j] = r->broadcast_fds[j + 1];
+    }
+
+    r->in_use--;
+
+} 
+
+int chat_room_poll(struct chat_room *r, int timeout) {
+    return epoll_wait(r->epollfd, r->events, r->capasity, timeout);
+}
+
+void chat_room_broadcast(struct chat_room *r, char *msg_buffer, int msg_size, int sender, int listener) {
+
+    for (int j = 0; j < r->in_use; j++) {
+        int destination = r->broadcast_fds[j];
+
+        if (destination != listener && destination != sender) {
+            if (send(destination, msg_buffer, msg_size, 0) == -1 && !is_non_block_error(errno)) {
+                perror("send");
+            }
+        }
+    }
+}
+
 
 void *get_in_addr(struct sockaddr *sa) {
     if ( sa->sa_family == AF_INET ) {
@@ -97,42 +206,12 @@ int get_listener_socket(char *port, int backlog) {
     return listener;
 }
 
-
-void add_to_events(struct epoll_event *events[], int epollfd, int newfd, int *fd_count, int *fd_size) {
-
-    if ( *fd_count == *fd_size ) {
-        // double the size of the array if we are out of space
-        *fd_size *= 2;
-        *events = realloc(*events, sizeof(**events) * (*fd_size));
-        if (*events == NULL) {
-            handle_perror("events realloc");
-        }
-    }
-
-    struct epoll_event *new_event = (*events) + (*fd_count);
-
-    new_event->data.fd = newfd;
-    new_event->events = EPOLLIN;
-
-    if ( epoll_ctl(epollfd, EPOLL_CTL_ADD, newfd, new_event) == -1 ) {
-        handle_perror("epoll_ctl; add");
-    }
-
-    (*fd_count)++;
-}
-
-
-void del_from_events(int epollfd, int fd, int *fd_count) {
-    if ( epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, NULL) == -1 ) {
-        handle_perror("epoll_ctl; del");
-    }
-    (*fd_count)--;
-}
-
 int main(void) {
 
-    int listener, newfd, epollfd, epoll_count;
+    int listener, newfd, epollfd, epoll_count, i;
     struct sockaddr_storage remoteaddr;
+    struct chat_room chat_room;
+    struct epoll_event *current_event;
     socklen_t addrlen;
 
     char buf[256], remoteIP[INET6_ADDRSTRLEN];
@@ -142,27 +221,24 @@ int main(void) {
         handle_error("Error getting a listening socket. Exiting\n");
     }
 
-    int fd_count = 0, fd_size = 10;
-    struct epoll_event *events = malloc(sizeof(*events) * fd_size);
-
-    epollfd = epoll_create1(0);
-    if (epollfd == -1) {
-        handle_perror("epollfd create1");
-    }
+    chat_room_init(&chat_room, 10);
 
     printf("chat: Listening on '%s'\n", PORT);
-    add_to_events(&events, epollfd, listener, &fd_count, &fd_size);
+
+    chat_room_add_client(&chat_room, listener);
 
     for (;;) {
-        epoll_count = epoll_wait(epollfd, events, fd_count, -1);
+        epoll_count = chat_room_poll(&chat_room, -1);
         if (epoll_count == -1) {
             handle_perror("epoll_wait");
         }
 
-        for (int i = 0; i < epoll_count; ++i) {
-            if (!(events[i].events & EPOLLIN)) continue;
+        for (i = 0; i < epoll_count; ++i) {
+            struct epoll_event *current_event = chat_room.events + i;
+            
+            if (!(current_event->events & EPOLLIN)) continue;
 
-            if (events[i].data.fd == listener) {
+            if (current_event->data.fd == listener) {
                 addrlen = sizeof remoteaddr;
                 newfd = accept(listener, (struct sockaddr *) &remoteaddr, &addrlen);
                 if (newfd == -1) {
@@ -170,7 +246,8 @@ int main(void) {
                 } else {
                     fcntl(newfd, F_SETFL, O_NONBLOCK);
 
-                    add_to_events(&events, epollfd, newfd, &fd_count, &fd_size);
+                    //add_to_events(&events, epollfd, newfd, &fd_count, &fd_size);
+                    chat_room_add_client(&chat_room, newfd);
 
                     printf("chat: new connection from %s on socket %d\n",
                         inet_ntop(remoteaddr.ss_family, get_in_addr((struct sockaddr *) &remoteaddr), remoteIP, INET6_ADDRSTRLEN),
@@ -178,42 +255,32 @@ int main(void) {
                     );
                 }
             } else {
-                int sender_fd = events[i].data.fd;
+                int sender_fd = current_event->data.fd;
                 int nbytes = recv(sender_fd, buf, sizeof(buf), 0);
 
                 if (nbytes <= 0) {
-                    // connection closed
+                    // connection closure state
                     if (nbytes == 0) {
                         // socket hung up
                         printf("chat: socket %d hung up\n", sender_fd);
-                        del_from_events(epollfd, sender_fd, &fd_count);
+                        chat_room_remove_client(&chat_room, sender_fd);
                         close(sender_fd);
 
-                    } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    } else if (!is_non_block_error(errno)) {
                         // error happend that is not the non-block error
                         perror("recv");
-                        del_from_events(epollfd, sender_fd, &fd_count);
+                        chat_room_remove_client(&chat_room, sender_fd);
                         close(sender_fd);
                     }
-
                 } else {
                     // broadcast to call other file descriptors
-                    for (int j = 0; j < fd_count; j++) {
-                        int dest_fd = events[j].data.fd;
-
-                        if (dest_fd != listener && dest_fd != sender_fd) {
-                            if (send(dest_fd, buf, nbytes, 0) == -1) {
-                                if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                                    perror("send");
-                                }
-                            }
-                        }
-                    }
+                    chat_room_broadcast(&chat_room, buf, nbytes, sender_fd, listener);
                 }
             }
         }
     }
 
+    chat_room_deinit(&chat_room);
     return 0;
 }
 

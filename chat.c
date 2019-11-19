@@ -22,7 +22,8 @@
 #define is_non_block_error(errcode) (errcode == EAGAIN || errcode == EWOULDBLOCK)
 
 void print_events(struct epoll_event events[], int fd_count) {
-    for (int i = 0; i < fd_count; ++i) {
+    int i;
+    for (i = 0; i < fd_count; ++i) {
         printf("%i fd: %i, event: %i\n", i , events[i].data.fd, events[i].events);
     }
 }
@@ -37,7 +38,8 @@ struct chat_room {
 };
 
 void debug_chat_room(struct chat_room *room) {
-    for (int i = 0; i < room->in_use; ++i) {
+    int i;
+    for (i = 0; i < room->in_use; ++i) {
         printf("%i| e.data.fd: %i, bfd: %i\n", i, room->events[i].data.fd, room->broadcast_fds[i]);
     }
 }
@@ -121,8 +123,8 @@ int chat_room_poll(struct chat_room *r, int timeout) {
 }
 
 void chat_room_broadcast(struct chat_room *r, char *msg_buffer, int msg_size, int sender, int listener) {
-
-    for (int j = 0; j < r->in_use; j++) {
+    int j;
+    for (j = 0; j < r->in_use; j++) {
         int destination = r->broadcast_fds[j];
 
         if (destination != listener && destination != sender) {

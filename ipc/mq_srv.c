@@ -1,4 +1,9 @@
-
+/*
+ * Blocking example of a program receiving messages on a message queue named "/fun".
+ * Receiving can be non-blocking by add the O_NONBLOCK to the open call, and then check
+ * for the EAGAIN error produced by the mq_receive call (which is returned if the call otherwise
+ * would have blocked).
+ */
 #include <stdio.h>
 #include <mqueue.h>
 #include <string.h>

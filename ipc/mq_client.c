@@ -1,4 +1,9 @@
-
+/*
+ * This program sends a message on the /fun message queue that then can be recieved by
+ * another process "listening" in on the same message queue.
+ *
+ * The mq_send call does not block unless the queue is full.
+ */
 #include <stdio.h>
 #include <mqueue.h>
 #include <string.h>

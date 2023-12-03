@@ -6,24 +6,20 @@
  */
 #include <stdio.h>
 #include <mqueue.h>
-#include <string.h>
 
 int main() {
 
-    struct mq_attr attr = {
-        .mq_maxmsg = 5;
-        .mq_msgsize = 512;
-    };
-
     // the identifier name must start with a /
-    mqd_t p = mq_open("/fun", O_CREAT | O_RDWR, 0664, &attr);
+    mqd_t p = mq_open("/fun", O_CREAT | O_RDWR, 0664, &((struct mq_attr) {
+        .mq_maxmsg = 5,
+        .mq_msgsize = 512
+    }));
     if (p == -1) {
         perror("failed init");
         return 1;
     }
 
-    char buf[512] = {0};
-    strcpy((&buf[0]), "Hello world!");
+    char buf[512] = "Hello world!";
 
     unsigned int prio = 1;
 

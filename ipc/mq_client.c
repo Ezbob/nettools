@@ -10,19 +10,19 @@
 
 int main() {
 
-    struct mq_attr attr;
+    struct mq_attr attr = {
+        .mq_maxmsg = 5;
+        .mq_msgsize = 512;
+    };
 
-    attr.mq_maxmsg = 5;
-    attr.mq_msgsize = 512;
-
+    // the identifier name must start with a /
     mqd_t p = mq_open("/fun", O_CREAT | O_RDWR, 0664, &attr);
     if (p == -1) {
         perror("failed init");
         return 1;
     }
 
-    char buf[512];
-    memset(buf, 0, sizeof(buf));
+    char buf[512] = {0};
     strcpy((&buf[0]), "Hello world!");
 
     unsigned int prio = 1;

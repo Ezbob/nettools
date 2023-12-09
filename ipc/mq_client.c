@@ -29,7 +29,7 @@ int main() {
         return 1;
     }
 
-    printf("sendt\n");
+    printf("sendt %s\n", (&buf[0]));
 
     mq_close(p);
     return 0;

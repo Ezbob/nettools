@@ -1,0 +1,7 @@
+/.mq_client
+/mq_srv
+/mq_client
+/shm_reader
+/shm_sender
+/unix_clnt
+/unix_srv

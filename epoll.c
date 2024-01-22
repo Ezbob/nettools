@@ -76,10 +76,15 @@ int main() {
             exit(EXIT_FAILURE);
         }
 
+        // every file descriptor can have multiple events for each change reported by the kernel (through epoll_wait)
         for (int i = 0; i < nfds; ++i) {
             int can_read = events[i].events & (EPOLLIN | EPOLLERR); // EPOLLERR needs to be handled
             int can_write = events[i].events & (EPOLLOUT | EPOLLERR); // you can write and read on any notified fd
+            int client_exit = events[i].events & (EPOLLHUP); // client side has closed the connection
 
+            if (client_exit) {
+                printf("client socket exit\n");
+            }
             if (can_read) {
                 printf("input event happend for fd %i\n", events[i].data.fd);
                 if (events[i].data.fd == sfd) {
@@ -93,11 +98,8 @@ int main() {
                     while (nread > 0) {
                         printf("%.*s", nread - 1, readbuf);
                         nread = read(events[i].data.fd, readbuf, sizeof(readbuf) - 1);
-                        if (nread < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                            break;
-                        }
                     };
-                    printf("'\n"); 
+                    printf("'\n");
                 }
             }
             if (can_write) {

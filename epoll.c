@@ -91,14 +91,15 @@ int main() {
                     printf("signalled!\n");
                     exit(0);
                 } else {
-                    int nread = 0; 
+                    ssize_t nread = 0, acc = 0;
                     printf("I saw '");
 
-                    nread = read(events[i].data.fd, readbuf, sizeof(readbuf) - 1);
-                    while (nread > 0) {
-                        printf("%.*s", nread - 1, readbuf);
-                        nread = read(events[i].data.fd, readbuf, sizeof(readbuf) - 1);
+                    nread = read(events[i].data.fd, readbuf, sizeof(readbuf));
+                    while (nread > 0 && acc <= sizeof(readbuf)) {
+                        acc += nread;
+                        nread = read(events[i].data.fd, readbuf + acc, (sizeof(readbuf) - acc));
                     };
+                    printf("%.*s", acc, readbuf);
                     printf("'\n");
                 }
             }
